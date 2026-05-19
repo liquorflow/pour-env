@@ -1,0 +1,8 @@
+node_modules/
+
+.env
+.env.local
+.parcel-cache/
+npm-debug.log*
+build/
+.cache/
