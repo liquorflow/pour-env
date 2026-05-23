@@ -1,64 +1,46 @@
-/**
- * High-level pipeline that ties together layer resolution, loading,
- * merging, and optional redaction into a single call.
- */
-
-const { getActiveLayers } = require('./layers');
+const { resolveLayers, getActiveLayers } = require('./layers');
 const { loadEnv, applyEnv } = require('./loader');
-const { mergeLayers, mergeSafe } = require('./merge');
+const { mergeLayers } = require('./merge');
 const { redactEnv } = require('./redact');
+const { validateEnv, parseSchema } = require('./validate');
 
 /**
- * @typedef {object} PipelineOptions
- * @property {string} [env]            - NODE_ENV override
- * @property {string} [cwd]            - working directory
- * @property {string[]} [layerPatterns] - custom layer patterns
- * @property {boolean} [override]      - if false, won't override existing process.env keys
- * @property {boolean} [redact]        - redact secrets before returning
- * @property {boolean} [apply]         - write merged values into process.env
+ * Full pipeline: resolve layers → load → merge → validate → redact → apply
+ *
+ * @param {object} options
+ * @param {string}   options.cwd          - working directory
+ * @param {string}   options.environment  - e.g. 'production'
+ * @param {boolean}  [options.ci]         - enable secret redaction
+ * @param {object}   [options.schema]     - validation schema (raw or parsed)
+ * @param {boolean}  [options.apply]      - write merged env into process.env
+ * @returns {{ env: Record<string,string>, redacted: Record<string,string>, errors: string[] }}
  */
+function run({ cwd, environment, ci = false, schema = null, apply = true }) {
+  const layers = resolveLayers(cwd, environment);
+  const active = getActiveLayers(layers);
+  const loaded = active.map((file) => loadEnv(file));
+  const env = mergeLayers(loaded);
 
-/**
- * Run the full pour-env pipeline.
- * @param {PipelineOptions} [options]
- * @returns {{ merged: Record<string, string>, sources: Record<string, string>, redacted?: Record<string, string> }}
- */
-function run(options = {}) {
-  const {
-    env,
-    cwd,
-    layerPatterns,
-    override = true,
-    redact = false,
-    apply = true,
-  } = options;
+  let errors = [];
+  if (schema) {
+    const parsed = typeof Object.values(schema)[0] === 'string'
+      ? parseSchema(schema)
+      : schema;
+    const result = validateEnv(env, parsed);
+    errors = result.errors;
+    if (!result.valid) {
+      const summary = result.errors.join('\n  ');
+      throw new Error(`Environment validation failed:\n  ${summary}`);
+    }
+  }
 
-  // 1. Resolve which files exist
-  const layerPaths = getActiveLayers({ env, cwd, layerPatterns });
+  const redacted = ci ? redactEnv(env) : env;
 
-  // 2. Parse each file
-  const layers = layerPaths.map((filePath) => ({
-    filePath,
-    values: loadEnv(filePath),
-  }));
-
-  // 3. Merge (with or without override)
-  const { merged, sources } = override
-    ? mergeLayers(layers)
-    : mergeSafe(layers);
-
-  // 4. Optionally apply to process.env
   if (apply) {
-    applyEnv(merged, override);
+    applyEnv(env);
   }
 
-  // 5. Optionally redact secrets in the returned object
-  const result = { merged, sources };
-  if (redact) {
-    result.redacted = redactEnv(merged);
-  }
-
-  return result;
+  return { env, redacted, errors };
 }
 
 module.exports = { run };
