@@ -21,6 +21,9 @@ function mergeLayers(layers) {
     if (!layer || typeof layer.values !== 'object') {
       throw new TypeError('mergeLayers: each layer must have a values object');
     }
+    if (Array.isArray(layer.values)) {
+      throw new TypeError('mergeLayers: layer.values must be a plain object, not an array');
+    }
     for (const [key, value] of Object.entries(layer.values)) {
       merged[key] = value;
       sources[key] = layer.filePath || 'unknown';
